@@ -1,0 +1,3 @@
+# Ignore HW description
+HW_description.pdf
+__pycache__/
