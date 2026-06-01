@@ -1,12 +1,13 @@
+import argparse
+import time
+
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
-from model import SimpleNNRelu, SimpleNNHardTanh
-from linear import BoundLinear
-from relu import BoundReLU
 from hardTanh_question import BoundHardTanh
-import time
-import argparse
+from linear import BoundLinear
+from model import SimpleNNHardTanh, SimpleNNRelu
+from relu import BoundReLU
 
 
 class BoundedSequential(nn.Sequential):
@@ -34,7 +35,9 @@ class BoundedSequential(nn.Sequential):
                 layers.append(BoundHardTanh.convert(l))
         return BoundedSequential(*layers)
 
-    def compute_bounds(self, x_U=None, x_L=None, upper=True, lower=True, optimize=False):
+    def compute_bounds(
+        self, x_U=None, x_L=None, upper=True, lower=True, optimize=False
+    ):
         r"""Main function for computing bounds.
 
         Args:
@@ -81,23 +84,43 @@ class BoundedSequential(nn.Sequential):
         # CROWN propagation for all layers
         for i in range(len(modules)):
             # We only need the bounds before a ReLU/HardTanh layer
-            if isinstance(modules[i], BoundReLU) or isinstance(modules[i], BoundHardTanh):
+            if isinstance(modules[i], BoundReLU) or isinstance(
+                modules[i], BoundHardTanh
+            ):
                 if isinstance(modules[i - 1], BoundLinear):
                     # add a batch dimension
-                    newC = torch.eye(modules[i - 1].out_features).unsqueeze(0).repeat(x_U.shape[0], 1, 1).to(x_U)
+                    newC = (
+                        torch.eye(modules[i - 1].out_features)
+                        .unsqueeze(0)
+                        .repeat(x_U.shape[0], 1, 1)
+                        .to(x_U)
+                    )
                     # Use CROWN to compute pre-activation bounds
                     # starting from layer i-1
-                    ub, lb = self.boundpropogate_from_layer(x_U=x_U, x_L=x_L, C=newC, upper=True, lower=True,
-                                                            start_node=i - 1)
+                    ub, lb = self.boundpropogate_from_layer(
+                        x_U=x_U,
+                        x_L=x_L,
+                        C=newC,
+                        upper=True,
+                        lower=True,
+                        start_node=i - 1,
+                    )
                 # Set pre-activation bounds for layer i (the ReLU layer)
                 modules[i].upper_u = ub
                 modules[i].lower_l = lb
         # Get the final layer bound
-        return self.boundpropogate_from_layer(x_U=x_U, x_L=x_L,
-                                              C=torch.eye(modules[i].out_features).unsqueeze(0).to(x_U), upper=upper,
-                                              lower=lower, start_node=i)
+        return self.boundpropogate_from_layer(
+            x_U=x_U,
+            x_L=x_L,
+            C=torch.eye(modules[i].out_features).unsqueeze(0).to(x_U),
+            upper=upper,
+            lower=lower,
+            start_node=i,
+        )
 
-    def boundpropogate_from_layer(self, x_U=None, x_L=None, C=None, upper=False, lower=True, start_node=None):
+    def boundpropogate_from_layer(
+        self, x_U=None, x_L=None, C=None, upper=False, lower=True, start_node=None
+    ):
         r"""The bound propagation starting from a given layer. Can be used to compute intermediate bounds or the final bound.
 
         Args:
@@ -117,12 +140,18 @@ class BoundedSequential(nn.Sequential):
             ub (tensor): The upper bound of the output of start_node.
             lb (tensor): The lower bound of the output of start_node.
         """
-        modules = list(self._modules.values()) if start_node is None else list(self._modules.values())[:start_node + 1]
+        modules = (
+            list(self._modules.values())
+            if start_node is None
+            else list(self._modules.values())[: start_node + 1]
+        )
         upper_A = C if upper else None
         lower_A = C if lower else None
         upper_sum_b = lower_sum_b = x_U.new([0])
         for i, module in enumerate(reversed(modules)):
-            upper_A, upper_b, lower_A, lower_b = module.boundpropogate(upper_A, lower_A, start_node)
+            upper_A, upper_b, lower_A, lower_b = module.boundpropogate(
+                upper_A, lower_A, start_node
+            )
             upper_sum_b = upper_b + upper_sum_b
             lower_sum_b = lower_b + lower_sum_b
 
@@ -149,25 +178,33 @@ class BoundedSequential(nn.Sequential):
         return ub, lb
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Create the parser
     parser = argparse.ArgumentParser()
-    parser.add_argument('-a', '--activation', default='relu', choices=['relu', 'hardtanh'],
-                        type=str, help='Activation Function')
-    parser.add_argument('data_file', type=str, help='input data, a tensor saved as a .pth file.')
+    parser.add_argument(
+        "-a",
+        "--activation",
+        default="relu",
+        choices=["relu", "hardtanh"],
+        type=str,
+        help="Activation Function",
+    )
+    parser.add_argument(
+        "data_file", type=str, help="input data, a tensor saved as a .pth file."
+    )
     # Parse the command line arguments
     args = parser.parse_args()
 
     x_test, label = torch.load(args.data_file)
 
-    if args.activation == 'relu':
-        print('use ReLU model')
+    if args.activation == "relu":
+        print("use ReLU model")
         model = SimpleNNRelu()
-        model.load_state_dict(torch.load('models/relu_model.pth'))
+        model.load_state_dict(torch.load("models/relu_model.pth"))
     else:
-        print('use HardTanh model')
+        print("use HardTanh model")
         model = SimpleNNHardTanh()
-        model.load_state_dict(torch.load('models/hardtanh_model.pth'))
+        model.load_state_dict(torch.load("models/hardtanh_model.pth"))
 
     batch_size = x_test.size(0)
     x_test = x_test.reshape(batch_size, -1)
@@ -185,6 +222,8 @@ if __name__ == '__main__':
     ub, lb = boundedmodel.compute_bounds(x_U=x_u, x_L=x_l, upper=True, lower=True)
     for i in range(batch_size):
         for j in range(y_size):
-            print('f_{j}(x_{i}): {l:8.4f} <= f_{j}(x_{i}+delta) <= {u:8.4f}'.format(
-                j=j, i=i, l=lb[i][j].item(), u=ub[i][j].item()))
-
+            print(
+                "f_{j}(x_{i}): {l:8.4f} <= f_{j}(x_{i}+delta) <= {u:8.4f}".format(
+                    j=j, i=i, l=lb[i][j].item(), u=ub[i][j].item()
+                )
+            )

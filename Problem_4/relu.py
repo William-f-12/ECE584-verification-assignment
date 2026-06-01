@@ -49,7 +49,7 @@ class BoundReLU(nn.ReLU):
 
         # CROWN upper and lower linear bounds
         upper_d = ub_r / (ub_r - lb_r)  # slope
-        upper_b = - lb_r * upper_d  # intercept
+        upper_b = -lb_r * upper_d  # intercept
         upper_d = upper_d.unsqueeze(1)
 
         # Lower bound: 0 if |lb| < |ub|, 1 otherwise.
@@ -78,5 +78,3 @@ class BoundReLU(nn.ReLU):
             mult_lA = neg_lA.view(last_lA.size(0), last_lA.size(1), -1)
             lbias = mult_lA.matmul(upper_b.view(upper_b.size(0), -1, 1)).squeeze(-1)
         return uA, ubias, lA, lbias
-
-

@@ -3,20 +3,24 @@ import torch.nn as nn
 
 
 class BoundLinear(nn.Linear):
-    def __init(self, in_features, out_features, bias=True):
+    def __init__(self, in_features, out_features, bias=True):
         super(BoundLinear, self).__init__(in_features, out_features, bias)
 
     @staticmethod
     def convert(linear_layer):
         r"""Convert a nn.Linear object into a BoundLinear object
 
-        Args: 
+        Args:
             linear_layer (nn.Linear): The linear layer to be converted.
 
         Returns:
             l (BoundLinear): The converted layer
         """
-        l = BoundLinear(linear_layer.in_features, linear_layer.out_features, linear_layer.bias is not None)
+        l = BoundLinear(
+            linear_layer.in_features,
+            linear_layer.out_features,
+            linear_layer.bias is not None,
+        )
         l.weight.data.copy_(linear_layer.weight.data)
         l.weight.data = l.weight.data.to(linear_layer.weight.device)
         l.bias.data.copy_(linear_layer.bias.data)

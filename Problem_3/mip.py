@@ -231,8 +231,8 @@ def load_model_and_data(data):
     model.eval()
     image_sample, sample_label = torch.load(data)
     image_sample = image_sample.reshape(1, -1)
-    outputs = model(image_sample)
-    predicted_label = outputs.argmax(dim=1)
+    # outputs = model(image_sample)
+    # predicted_label = outputs.argmax(dim=1)
 
     return model, image_sample[0], sample_label
 
@@ -274,7 +274,7 @@ def verify(model, input_image, groundtruth_label, perturbation):
     objectives, target_labels = v.get_verification_objectives(
         variables, groundtruth_label
     )
-    print(f"Optimizing verification objectives...")
+    print("Optimizing verification objectives...")
     optimal_objs, optimal_solutions = v.solve_objectives(
         objectives, direction="minimization"
     )
