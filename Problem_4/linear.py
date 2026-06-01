@@ -27,7 +27,7 @@ class BoundLinear(nn.Linear):
         l.bias.data = l.bias.to(linear_layer.bias.device)
         return l
 
-    def boundpropogate(self, last_uA, last_lA, start_node=None):
+    def boundpropogate(self, last_uA, last_lA, start_node=None, alpha=None):
         r"""Bound propagate through the linear layer
 
         Args:
