@@ -85,91 +85,46 @@ class BoundedSequential(nn.Sequential):
         """
         modules = list(self._modules.values())
 
-        # Step 0: initialize alpha parameters on all BoundHardTanh layers
-        # (must be before any bound propagation, since cases 4-6 use alpha)
+        # Step 1: compute pre-activation bounds using the optimal fixed formula
+        # (alpha is not set on any module → fallback to compute_optimal_slope)
+        self.full_boundpropogation(x_U=x_U, x_L=x_L, upper=True, lower=True)
+
+        # Step 2: initialize alpha from the optimal slope d_opt
+        # d_opt is computed from the pre-activation bounds we just obtained
+        alphas = []
         for module in modules:
             if isinstance(module, BoundHardTanh):
-                module.alpha = None  # reset in case of repeated calls
-
-        for i, module in enumerate(modules):
-            if isinstance(module, BoundHardTanh) and isinstance(
-                modules[i - 1], BoundLinear
-            ):
-                shape = (x_U.shape[0], modules[i - 1].out_features)
-                module.alpha = nn.Parameter(torch.zeros(*shape, device=x_U.device))
-
-        # Step 1: compute pre-activation bounds (using initial alpha=0 → sigmoid=0.5)
-        for i in range(len(modules)):
-            if isinstance(modules[i], BoundHardTanh):
-                if isinstance(modules[i - 1], BoundLinear):
-                    newC = (
-                        torch.eye(modules[i - 1].out_features)
-                        .unsqueeze(0)
-                        .repeat(x_U.shape[0], 1, 1)
-                        .to(x_U)
+                if hasattr(module, "alpha") and module.alpha is not None:
+                    del module.alpha
+                device = module.lower_l.device
+                with torch.no_grad():
+                    d_opt = BoundHardTanh.compute_optimal_slope(
+                        module.lower_l, module.upper_u
                     )
-                    ub, lb = self.boundpropogate_from_layer(
-                        x_U=x_U,
-                        x_L=x_L,
-                        C=newC,
-                        upper=True,
-                        lower=True,
-                        start_node=i - 1,
-                    )
-                    modules[i].upper_u = ub
-                    modules[i].lower_l = lb
+                    d_opt_clamped = d_opt.clamp(min=1e-6, max=1 - 1e-6)
+                    alpha_init = torch.log(d_opt_clamped / (1 - d_opt_clamped))
+                module.alpha = nn.Parameter(alpha_init)
+                alphas.append(module.alpha)
 
-        # Detach pre-activation bounds (keep them fixed during optimization)
-        for module in modules:
-            if isinstance(module, BoundHardTanh):
-                module.lower_l = module.lower_l.detach()
-                module.upper_u = module.upper_u.detach()
-
-        # Collect all learnable alpha parameters
-        alphas = [
-            m.alpha
-            for m in modules
-            if isinstance(m, BoundHardTanh) and m.alpha is not None
-        ]
-
-        last_idx = len(modules) - 1
-        if isinstance(modules[last_idx], BoundLinear):
-            out_features = modules[last_idx].out_features
+        if not alphas:
+            ub, lb = self.full_boundpropogation(
+                x_U=x_U, x_L=x_L, upper=upper, lower=lower
+            )
         else:
-            out_features = modules[last_idx - 1].out_features
-        C = torch.eye(out_features).unsqueeze(0).to(x_U)
-
-        # Step 2: optimization loop
-        if alphas:
-            optimizer = torch.optim.Adam(alphas, lr=0.1)
+            # Step 3: end-to-end optimization, starting from d_opt
+            optimizer = torch.optim.Adam(alphas, lr=0.01)
             for _ in range(optim_steps):
-                ub, lb = self.boundpropogate_from_layer(
-                    x_U=x_U,
-                    x_L=x_L,
-                    C=C,
-                    upper=upper,
-                    lower=lower,
-                    start_node=last_idx,
+                ub, lb = self.full_boundpropogation(
+                    x_U=x_U, x_L=x_L, upper=upper, lower=lower
                 )
-
                 loss = (ub - lb).sum()
-
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
-        else:
-            ub, lb = self.boundpropogate_from_layer(
-                x_U=x_U,
-                x_L=x_L,
-                C=C,
-                upper=upper,
-                lower=lower,
-                start_node=last_idx,
-            )
 
         # Clean up alpha parameters
         for module in modules:
-            if hasattr(module, "alpha"):
+            if hasattr(module, "alpha") and module.alpha is not None:
                 del module.alpha
 
         return ub.detach(), lb.detach()

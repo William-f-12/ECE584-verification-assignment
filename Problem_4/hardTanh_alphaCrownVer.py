@@ -11,6 +11,32 @@ class BoundHardTanh(nn.Hardtanh):
     def convert(act_layer):
         return BoundHardTanh()
 
+    @staticmethod
+    def compute_optimal_slope(l, u):
+        r"""Compute the optimal fixed slope for each neuron using the analytic formula."""
+        u_safe = torch.max(u, l + 1e-8)
+
+        case1 = u_safe <= -1
+        case2 = ~case1 & (l >= 1)
+        case3 = ~case1 & ~case2 & (l >= -1) & (u_safe <= 1)
+        case4 = ~case1 & ~case2 & ~case3 & (u_safe <= 1)
+        case5 = ~case1 & ~case2 & ~case3 & (l >= -1) & (u_safe > 1)
+        case6 = ~case1 & ~case2 & ~case3 & (l < -1) & (u_safe > 1)
+
+        d = torch.zeros_like(l)
+        d = torch.where(case1 | case2, torch.zeros_like(d), d)
+        d = torch.where(case3, torch.ones_like(d), d)
+        d = torch.where(case4, (u_safe + 1) / (u_safe - l), d)
+        d = torch.where(case5, (1 - l) / (u_safe - l), d)
+
+        abs_l_greater = (-l) > u_safe
+        d6a = 2 / (1 - l)
+        d6b = 2 / (u_safe + 1)
+        d = torch.where(case6 & abs_l_greater, d6a, d)
+        d = torch.where(case6 & ~abs_l_greater, d6b, d)
+
+        return d
+
     def boundpropogate(self, last_uA, last_lA, start_node=None, alpha=None):
         preact_lb = self.lower_l
         preact_ub = self.upper_u
@@ -39,19 +65,37 @@ class BoundHardTanh(nn.Hardtanh):
         # α-CROWN: override unstable neurons with learnable alpha
         unstable = ~(case1 | case2 | case3)
         if unstable.any():
-            d_unstable = torch.sigmoid(alpha)  # ensure d in [0, 1]
+            if alpha is not None:
+                d_unstable = torch.sigmoid(alpha)
+            else:
+                d_unstable = self.compute_optimal_slope(preact_lb, preact_ub)
             f_l = preact_lb.clamp(-1, 1)
             f_u = preact_ub.clamp(-1, 1)
-            candidates = torch.stack(
-                [
-                    f_l - d_unstable * preact_lb,
-                    -1.0 - d_unstable * (-1.0),
-                    1.0 - d_unstable * 1.0,
-                    f_u - d_unstable * preact_ub,
-                ]
-            )
-            ub_unstable = candidates.max(dim=0).values
-            lb_unstable = candidates.min(dim=0).values
+
+            # Only include candidate points within [preact_lb, preact_ub]
+            # Candidates outside the interval are set to -inf (max) / +inf (min)
+            include_m1 = (preact_lb <= -1) & (preact_ub >= -1)
+            include_p1 = (preact_lb <= 1) & (preact_ub >= 1)
+
+            candidates_max = torch.stack([
+                f_l - d_unstable * preact_lb,
+                f_u - d_unstable * preact_ub,
+                torch.where(include_m1, -1.0 - d_unstable * (-1.0),
+                            torch.full_like(preact_lb, float('-inf'))),
+                torch.where(include_p1, 1.0 - d_unstable * 1.0,
+                            torch.full_like(preact_lb, float('-inf'))),
+            ])
+            ub_unstable = candidates_max.max(dim=0).values
+
+            candidates_min = torch.stack([
+                f_l - d_unstable * preact_lb,
+                f_u - d_unstable * preact_ub,
+                torch.where(include_m1, -1.0 - d_unstable * (-1.0),
+                            torch.full_like(preact_lb, float('inf'))),
+                torch.where(include_p1, 1.0 - d_unstable * 1.0,
+                            torch.full_like(preact_lb, float('inf'))),
+            ])
+            lb_unstable = candidates_min.min(dim=0).values
 
             d = torch.where(unstable, d_unstable, d)
             ub = torch.where(unstable, ub_unstable, ub)
